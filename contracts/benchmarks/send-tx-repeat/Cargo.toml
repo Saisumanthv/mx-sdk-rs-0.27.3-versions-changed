@@ -1,0 +1,17 @@
+[package]
+name = "send-tx-repeat"
+version = "0.0.0"
+authors = ["Dorin Iancu <dorin.iancu@dharitri.com>"]
+edition = "2018"
+publish = false
+
+[lib]
+path = "src/send_tx_repeat.rs"
+
+[dependencies.dharitri-wasm]
+version = "0.4.0"
+path = "../../../dharitri-wasm"
+
+[dev-dependencies.dharitri-wasm-debug]
+version = "0.4.0"
+path = "../../../dharitri-wasm-debug"

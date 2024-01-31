@@ -1,0 +1,93 @@
+{
+    "name": "wrap moax",
+    "steps": [
+        {
+            "step": "setState",
+            "accounts": {
+                "address:user": {
+                    "nonce": "0",
+                    "balance": "1000"
+                },
+                "sc:moax-dct-swap": {
+                    "nonce": "0",
+                    "balance": "0",
+                    "dct": {
+                        "str:WMOAX-abcdef": "2000"
+                    },
+                    "storage": {
+                        "str:wrapped_moax_token_id": "str:WMOAX-abcdef",
+                        "str:unused_wrapped_moax": "2000"
+                    },
+                    "code": "file:../output/moax-dct-swap.wasm"
+                }
+            }
+        },
+        {
+            "step": "scCall",
+            "txId": "wrap-moax",
+            "tx": {
+                "from": "address:user",
+                "to": "sc:moax-dct-swap",
+                "moaxValue": "500",
+                "function": "wrapMoax",
+                "arguments": [],
+                "gasLimit": "100,000,000",
+                "gasPrice": "0"
+            },
+            "expect": {
+                "out": [],
+                "status": "0",
+                "message": "",
+                "logs": [
+                    {
+                        "address": "sc:moax-dct-swap",
+                        "endpoint": "str:DCTTransfer",
+                        "topics": [
+                            "str:WMOAX-abcdef",
+                            "",
+                            "500",
+                            "address:user"
+                        ],
+                        "data": ""
+                    },
+                    {
+                        "address": "sc:moax-dct-swap",
+                        "endpoint": "str:wrapMoax",
+                        "topics": [
+                            "str:wrap-moax",
+                            "address:user"
+                        ],
+                        "data": "500"
+                    }
+                ],
+                "gas": "*",
+                "refund": "*"
+            }
+        },
+        {
+            "step": "checkState",
+            "accounts": {
+                "address:user": {
+                    "nonce": "1",
+                    "balance": "500",
+                    "dct": {
+                        "str:WMOAX-abcdef": "500"
+                    },
+                    "storage": {}
+                },
+                "sc:moax-dct-swap": {
+                    "nonce": "0",
+                    "balance": "500",
+                    "dct": {
+                        "str:WMOAX-abcdef": "1500"
+                    },
+                    "storage": {
+                        "str:wrapped_moax_token_id": "str:WMOAX-abcdef",
+                        "str:unused_wrapped_moax": "1500"
+                    },
+                    "code": "file:../output/moax-dct-swap.wasm"
+                }
+            }
+        }
+    ]
+}

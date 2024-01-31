@@ -1,0 +1,26 @@
+[package]
+name = "dharitri-wasm-module-features"
+version = "0.4.0"
+edition = "2018"
+
+authors = ["Andrei Marinica <andrei.marinica@dharitri.com>", "Dharitri Network <contact@dharitri.com>"]
+license = "GPL-3.0-only"
+readme = "README.md"
+repository = "https://github.com/Battula-anil-app-could/dx-sdk-rs-new"
+homepage = "https://dharitri.com/"
+documentation = "https://docs.dharitri.com/"
+description = "Dharitri WebAssembly smart contract module for adding feature flags"
+keywords = ["dharitri", "wasm", "webassembly", "blockchain", "contract"]
+categories = ["no-std", "wasm", "cryptography::cryptocurrencies"]
+
+[dependencies.dharitri-wasm]
+version = "0.4.0"
+path = "../../../dharitri-wasm"
+
+[dependencies.dharitri-wasm-modules]
+version = "0.4.0"
+path = "../../../dharitri-wasm-modules"
+
+[dev-dependencies.dharitri-wasm-debug]
+version = "0.4.0"
+path = "../../../dharitri-wasm-debug"

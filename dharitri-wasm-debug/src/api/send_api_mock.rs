@@ -1,0 +1,525 @@
+use crate::{
+    tx_execution::{deploy_contract, execute_builtin_function_or_default},
+    tx_mock::{AsyncCallTxData, BlockchainUpdate, TxCache, TxInput, TxPanic, TxResult},
+    DebugApi,
+};
+use dharitri_wasm::{
+    api::{
+        BlockchainApiImpl, ManagedTypeApi, SendApi, SendApiImpl, StorageReadApiImpl,
+        StorageWriteApiImpl, DCT_MULTI_TRANSFER_FUNC_NAME, DCT_NFT_TRANSFER_FUNC_NAME,
+        DCT_TRANSFER_FUNC_NAME, UPGRADE_CONTRACT_FUNC_NAME,
+    },
+    dharitri_codec::top_encode_to_vec_u8,
+    types::{
+        Address, BigUint, CodeMetadata, DctTokenPayment, ManagedAddress, ManagedArgBuffer,
+        ManagedBuffer, ManagedType, ManagedVec, TokenIdentifier,
+    },
+};
+use num_traits::Zero;
+
+impl DebugApi {
+    fn append_endpoint_name_and_args<M: ManagedTypeApi>(
+        args: &mut Vec<Vec<u8>>,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) {
+        if !endpoint_name.is_empty() {
+            args.push(endpoint_name.to_boxed_bytes().into_vec());
+            args.extend(
+                arg_buffer
+                    .raw_arg_iter()
+                    .map(|mb| mb.to_boxed_bytes().into_vec()),
+            );
+        }
+    }
+
+    fn sync_call_post_processing(
+        &self,
+        tx_result: TxResult,
+        blockchain_updates: BlockchainUpdate,
+    ) -> Vec<Vec<u8>> {
+        self.blockchain_cache().commit_updates(blockchain_updates);
+
+        self.result_borrow_mut().merge_after_sync_call(&tx_result);
+
+        tx_result.result_values
+    }
+
+    fn perform_execute_on_dest_context(
+        &self,
+        to: Address,
+        moax_value: num_bigint::BigUint,
+        func_name: Vec<u8>,
+        args: Vec<Vec<u8>>,
+    ) -> Vec<Vec<u8>> {
+        let contract_address = &self.input_ref().to;
+        let tx_hash = self.get_tx_hash_legacy();
+        let tx_input = TxInput {
+            from: contract_address.clone(),
+            to,
+            moax_value,
+            dct_values: Vec::new(),
+            func_name,
+            args,
+            gas_limit: 1000,
+            gas_price: 0,
+            tx_hash,
+        };
+
+        let tx_cache = TxCache::new(self.blockchain_cache_rc());
+        let (tx_result, blockchain_updates) =
+            execute_builtin_function_or_default(tx_input, tx_cache);
+
+        if tx_result.result_status == 0 {
+            self.sync_call_post_processing(tx_result, blockchain_updates)
+        } else {
+            // also kill current execution
+            std::panic::panic_any(TxPanic {
+                status: tx_result.result_status,
+                message: tx_result.result_message.into_bytes(),
+            })
+        }
+    }
+
+    fn perform_deploy(
+        &self,
+        contract_code: Vec<u8>,
+        moax_value: num_bigint::BigUint,
+        args: Vec<Vec<u8>>,
+    ) -> (Address, Vec<Vec<u8>>) {
+        let contract_address = &self.input_ref().to;
+        let tx_hash = self.get_tx_hash_legacy();
+        let tx_input = TxInput {
+            from: contract_address.clone(),
+            to: Address::zero(),
+            moax_value,
+            dct_values: Vec::new(),
+            func_name: Vec::new(),
+            args,
+            gas_limit: 1000,
+            gas_price: 0,
+            tx_hash,
+        };
+
+        let tx_cache = TxCache::new(self.blockchain_cache_rc());
+        tx_cache.increase_acount_nonce(contract_address);
+        let (tx_result, blockchain_updates, new_address) =
+            deploy_contract(tx_input, contract_code, tx_cache);
+
+        if tx_result.result_status == 0 {
+            (
+                new_address,
+                self.sync_call_post_processing(tx_result, blockchain_updates),
+            )
+        } else {
+            // also kill current execution
+            std::panic::panic_any(TxPanic {
+                status: 10,
+                message: b"error signalled by smartcontract".to_vec(),
+            })
+        }
+    }
+
+    fn perform_async_call(&self, call: AsyncCallTxData) -> ! {
+        // the cell is no longer needed, since we end in a panic
+        let mut tx_result = self.extract_result();
+        tx_result.result_calls.async_call = Some(call);
+        std::panic::panic_any(tx_result)
+    }
+
+    fn perform_upgrade_contract<M: ManagedTypeApi>(
+        &self,
+        sc_address: &ManagedAddress<M>,
+        amount: &BigUint<M>,
+        contract_code: Vec<u8>,
+        code_metadata: CodeMetadata,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ! {
+        let recipient = sc_address.to_address();
+        let call_value = self.big_uint_handle_to_value(amount.get_raw_handle());
+        let contract_address = self.input_ref().to.clone();
+        let tx_hash = self.get_tx_hash_legacy();
+
+        let mut arguments = vec![contract_code, top_encode_to_vec_u8(&code_metadata).unwrap()];
+        arguments.extend(
+            arg_buffer
+                .raw_arg_iter()
+                .map(|mb| mb.to_boxed_bytes().into_vec()),
+        );
+        let call = AsyncCallTxData {
+            from: contract_address,
+            to: recipient,
+            call_value,
+            endpoint_name: UPGRADE_CONTRACT_FUNC_NAME.to_vec(),
+            arguments,
+            tx_hash,
+        };
+        self.perform_async_call(call)
+    }
+
+    fn get_contract_code(&self, address: &Address) -> Vec<u8> {
+        self.blockchain_cache()
+            .with_account(address, |account| account.contract_path.clone())
+            .unwrap_or_else(|| panic!("Account is not a smart contract, it has no code"))
+    }
+}
+
+impl SendApi for DebugApi {
+    type SendApiImpl = DebugApi;
+
+    fn send_api_impl() -> Self::SendApiImpl {
+        DebugApi::new_from_static()
+    }
+}
+
+impl SendApiImpl for DebugApi {
+    fn direct_moax<M, D>(&self, to: &ManagedAddress<M>, amount: &BigUint<M>, _data: D)
+    where
+        M: ManagedTypeApi,
+        D: Into<ManagedBuffer<M>>,
+    {
+        let amount_value = self.big_uint_handle_to_value(amount.get_raw_handle());
+        let available_moax_balance =
+            self.with_contract_account(|account| account.moax_balance.clone());
+        if amount_value > available_moax_balance {
+            std::panic::panic_any(TxPanic {
+                status: 10,
+                message: b"failed transfer (insufficient funds)".to_vec(),
+            });
+        }
+
+        let contract_address = &self.input_ref().to;
+        self.blockchain_cache()
+            .subtract_moax_balance(contract_address, &amount_value);
+
+        let recipient = &to.to_address();
+        self.blockchain_cache()
+            .increase_moax_balance(recipient, &amount_value);
+    }
+
+    fn direct_moax_execute<M: ManagedTypeApi>(
+        &self,
+        to: &ManagedAddress<M>,
+        amount: &BigUint<M>,
+        _gas_limit: u64,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> Result<(), &'static [u8]> {
+        let moax_value = self.big_uint_handle_to_value(amount.get_raw_handle());
+        let recipient = to.to_address();
+
+        let _ = self.perform_execute_on_dest_context(
+            recipient,
+            moax_value,
+            endpoint_name.to_boxed_bytes().into_vec(),
+            arg_buffer.to_raw_args_vec(),
+        );
+
+        Ok(())
+    }
+
+    fn direct_dct_execute<M: ManagedTypeApi>(
+        &self,
+        to: &ManagedAddress<M>,
+        token: &TokenIdentifier<M>,
+        amount: &BigUint<M>,
+        _gas_limit: u64,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> Result<(), &'static [u8]> {
+        let recipient = to.to_address();
+        let token_bytes = top_encode_to_vec_u8(token).unwrap();
+        let amount_bytes = top_encode_to_vec_u8(amount).unwrap();
+
+        let mut args = vec![token_bytes, amount_bytes];
+        Self::append_endpoint_name_and_args(&mut args, endpoint_name, arg_buffer);
+
+        let _ = self.perform_execute_on_dest_context(
+            recipient,
+            num_bigint::BigUint::zero(),
+            DCT_TRANSFER_FUNC_NAME.to_vec(),
+            args,
+        );
+
+        Ok(())
+    }
+
+    fn direct_dct_nft_execute<M: ManagedTypeApi>(
+        &self,
+        to: &ManagedAddress<M>,
+        token: &TokenIdentifier<M>,
+        nonce: u64,
+        amount: &BigUint<M>,
+        _gas_limit: u64,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> Result<(), &'static [u8]> {
+        let contract_address = self.input_ref().to.clone();
+        let recipient = to.to_address();
+
+        let token_bytes = top_encode_to_vec_u8(token).unwrap();
+        let nonce_bytes = top_encode_to_vec_u8(&nonce).unwrap();
+        let amount_bytes = top_encode_to_vec_u8(amount).unwrap();
+
+        let mut args = vec![
+            token_bytes,
+            nonce_bytes,
+            amount_bytes,
+            recipient.as_bytes().to_vec(),
+        ];
+
+        Self::append_endpoint_name_and_args(&mut args, endpoint_name, arg_buffer);
+
+        let _ = self.perform_execute_on_dest_context(
+            contract_address,
+            num_bigint::BigUint::zero(),
+            DCT_NFT_TRANSFER_FUNC_NAME.to_vec(),
+            args,
+        );
+
+        Ok(())
+    }
+
+    fn direct_multi_dct_transfer_execute<M: ManagedTypeApi>(
+        &self,
+        to: &ManagedAddress<M>,
+        payments: &ManagedVec<M, DctTokenPayment<M>>,
+        _gas_limit: u64,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> Result<(), &'static [u8]> {
+        let contract_address = self.input_ref().to.clone();
+        let recipient = to.to_address();
+
+        let mut args = vec![
+            recipient.as_bytes().to_vec(),
+            top_encode_to_vec_u8(&payments.len()).unwrap(),
+        ];
+
+        for payment in payments.into_iter() {
+            let token_bytes = top_encode_to_vec_u8(&payment.token_identifier).unwrap();
+            args.push(token_bytes);
+            let nonce_bytes = top_encode_to_vec_u8(&payment.token_nonce).unwrap();
+            args.push(nonce_bytes);
+            let amount_bytes = top_encode_to_vec_u8(&payment.amount).unwrap();
+            args.push(amount_bytes);
+        }
+
+        if !endpoint_name.is_empty() {
+            args.push(endpoint_name.to_boxed_bytes().into_vec());
+            args.extend(
+                arg_buffer
+                    .raw_arg_iter()
+                    .map(|mb| mb.to_boxed_bytes().into_vec()),
+            );
+        }
+
+        let _ = self.perform_execute_on_dest_context(
+            contract_address,
+            num_bigint::BigUint::zero(),
+            DCT_MULTI_TRANSFER_FUNC_NAME.to_vec(),
+            args,
+        );
+
+        Ok(())
+    }
+
+    fn async_call_raw<M: ManagedTypeApi>(
+        &self,
+        to: &ManagedAddress<M>,
+        amount: &BigUint<M>,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ! {
+        let amount_value = self.big_uint_handle_to_value(amount.get_raw_handle());
+        let contract_address = self.input_ref().to.clone();
+        let recipient = to.to_address();
+        let tx_hash = self.get_tx_hash_legacy();
+        let call = AsyncCallTxData {
+            from: contract_address,
+            to: recipient,
+            call_value: amount_value,
+            endpoint_name: endpoint_name.to_boxed_bytes().into_vec(),
+            arguments: arg_buffer.to_raw_args_vec(),
+            tx_hash,
+        };
+        self.perform_async_call(call)
+    }
+
+    fn deploy_contract<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        amount: &BigUint<M>,
+        code: &ManagedBuffer<M>,
+        _code_metadata: CodeMetadata,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> (ManagedAddress<M>, ManagedVec<M, ManagedBuffer<M>>) {
+        let moax_value = self.big_uint_handle_to_value(amount.get_raw_handle());
+        let contract_code = code.to_boxed_bytes().into_vec();
+        let (new_address, result) =
+            self.perform_deploy(contract_code, moax_value, arg_buffer.to_raw_args_vec());
+
+        (ManagedAddress::from(new_address), ManagedVec::from(result))
+    }
+
+    fn deploy_from_source_contract<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        amount: &BigUint<M>,
+        source_contract_address: &ManagedAddress<M>,
+        _code_metadata: CodeMetadata,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> (ManagedAddress<M>, ManagedVec<M, ManagedBuffer<M>>) {
+        let moax_value = self.big_uint_handle_to_value(amount.get_raw_handle());
+        let source_contract_code = self.get_contract_code(&source_contract_address.to_address());
+        let (new_address, result) = self.perform_deploy(
+            source_contract_code,
+            moax_value,
+            arg_buffer.to_raw_args_vec(),
+        );
+
+        (ManagedAddress::from(new_address), ManagedVec::from(result))
+    }
+
+    fn upgrade_contract<M: ManagedTypeApi>(
+        &self,
+        sc_address: &ManagedAddress<M>,
+        _gas: u64,
+        amount: &BigUint<M>,
+        code: &ManagedBuffer<M>,
+        code_metadata: CodeMetadata,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) {
+        let contract_code = code.to_boxed_bytes().into_vec();
+        self.perform_upgrade_contract(sc_address, amount, contract_code, code_metadata, arg_buffer)
+    }
+
+    fn upgrade_from_source_contract<M: ManagedTypeApi>(
+        &self,
+        sc_address: &ManagedAddress<M>,
+        _gas: u64,
+        amount: &BigUint<M>,
+        source_contract_address: &ManagedAddress<M>,
+        code_metadata: CodeMetadata,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) {
+        let contract_code = self.get_contract_code(&source_contract_address.to_address());
+        self.perform_upgrade_contract(sc_address, amount, contract_code, code_metadata, arg_buffer)
+    }
+
+    fn execute_on_dest_context_raw<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        to: &ManagedAddress<M>,
+        value: &BigUint<M>,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ManagedVec<M, ManagedBuffer<M>> {
+        let moax_value = self.big_uint_handle_to_value(value.get_raw_handle());
+        let recipient = to.to_address();
+
+        let result = self.perform_execute_on_dest_context(
+            recipient,
+            moax_value,
+            endpoint_name.to_boxed_bytes().into_vec(),
+            arg_buffer.to_raw_args_vec(),
+        );
+
+        ManagedVec::from(result)
+    }
+
+    fn execute_on_dest_context_raw_custom_result_range<M, F>(
+        &self,
+        _gas: u64,
+        to: &ManagedAddress<M>,
+        value: &BigUint<M>,
+        endpoint_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+        range_closure: F,
+    ) -> ManagedVec<M, ManagedBuffer<M>>
+    where
+        M: ManagedTypeApi,
+        F: FnOnce(usize, usize) -> (usize, usize),
+    {
+        let moax_value = self.big_uint_handle_to_value(value.get_raw_handle());
+        let recipient = to.to_address();
+
+        let num_return_data_before = self.result_borrow_mut().result_values.len();
+
+        let result = self.perform_execute_on_dest_context(
+            recipient,
+            moax_value,
+            endpoint_name.to_boxed_bytes().into_vec(),
+            arg_buffer.to_raw_args_vec(),
+        );
+
+        let num_return_data_after = result.len();
+        let (result_start_index, result_end_index) = range_closure(
+            num_return_data_before as usize,
+            num_return_data_after as usize,
+        );
+
+        ManagedVec::from(result[result_start_index..result_end_index].to_vec())
+    }
+
+    fn execute_on_dest_context_by_caller_raw<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        _to: &ManagedAddress<M>,
+        _value: &BigUint<M>,
+        _endpoint_name: &ManagedBuffer<M>,
+        _arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ManagedVec<M, ManagedBuffer<M>> {
+        panic!("execute_on_dest_context_by_caller_raw not implemented yet!");
+    }
+
+    fn execute_on_same_context_raw<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        _to: &ManagedAddress<M>,
+        _value: &BigUint<M>,
+        _endpoint_name: &ManagedBuffer<M>,
+        _arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ManagedVec<M, ManagedBuffer<M>> {
+        panic!("execute_on_same_context_raw not implemented yet!");
+    }
+
+    fn execute_on_dest_context_readonly_raw<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        _to: &ManagedAddress<M>,
+        _endpoint_name: &ManagedBuffer<M>,
+        _arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ManagedVec<M, ManagedBuffer<M>> {
+        panic!("execute_on_dest_context_readonly_raw not implemented yet!");
+    }
+
+    fn storage_store_tx_hash_key<M: ManagedTypeApi>(&self, data: &ManagedBuffer<M>) {
+        let tx_hash = self.get_tx_hash_legacy();
+        self.storage_store_slice_u8(tx_hash.as_bytes(), data.to_boxed_bytes().as_slice());
+    }
+
+    fn storage_load_tx_hash_key<M: ManagedTypeApi>(&self) -> ManagedBuffer<M> {
+        let tx_hash = self.get_tx_hash_legacy();
+        let bytes = self.storage_load_boxed_bytes(tx_hash.as_bytes());
+        ManagedBuffer::new_from_bytes(bytes.as_slice())
+    }
+
+    fn call_local_dct_built_in_function<M: ManagedTypeApi>(
+        &self,
+        _gas: u64,
+        function_name: &ManagedBuffer<M>,
+        arg_buffer: &ManagedArgBuffer<M>,
+    ) -> ManagedVec<M, ManagedBuffer<M>> {
+        let contract_address = &self.input_ref().to;
+
+        let result = self.perform_execute_on_dest_context(
+            contract_address.clone(),
+            num_bigint::BigUint::zero(),
+            function_name.to_boxed_bytes().into_vec(),
+            arg_buffer.to_raw_args_vec(),
+        );
+
+        ManagedVec::from(result)
+    }
+}

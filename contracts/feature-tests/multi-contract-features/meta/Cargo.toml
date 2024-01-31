@@ -1,0 +1,17 @@
+[package]
+name = "multi-contract-features-meta"
+version = "0.0.0"
+authors = ["Andrei Marinica <andrei.marinica@dharitri.com>"]
+edition = "2018"
+publish = false
+
+[dependencies.multi-contract-features]
+path = ".."
+
+[dependencies.dharitri-wasm]
+version = "0.4.0"
+path = "../../../../dharitri-wasm"
+
+[dependencies.dharitri-wasm-debug]
+version = "0.4.0"
+path = "../../../../dharitri-wasm-debug"

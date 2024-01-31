@@ -1,0 +1,15 @@
+////////////////////////////////////////////////////
+////////////////// AUTO-GENERATED //////////////////
+////////////////////////////////////////////////////
+
+#![no_std]
+
+dharitri_wasm_node::wasm_endpoints! {
+    order_book_factory
+    (
+        createPair
+        getPair
+    )
+}
+
+dharitri_wasm_node::wasm_empty_callback! {}

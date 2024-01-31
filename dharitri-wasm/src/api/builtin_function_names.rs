@@ -1,0 +1,11 @@
+pub const DCT_LOCAL_MINT_FUNC_NAME: &[u8] = b"DCTLocalMint";
+pub const DCT_LOCAL_BURN_FUNC_NAME: &[u8] = b"DCTLocalBurn";
+pub const DCT_MULTI_TRANSFER_FUNC_NAME: &[u8] = b"MultiDCTNFTTransfer";
+pub const DCT_NFT_TRANSFER_FUNC_NAME: &[u8] = b"DCTNFTTransfer";
+pub const DCT_NFT_CREATE_FUNC_NAME: &[u8] = b"DCTNFTCreate";
+pub const DCT_NFT_ADD_QUANTITY_FUNC_NAME: &[u8] = b"DCTNFTAddQuantity";
+pub const DCT_NFT_BURN_FUNC_NAME: &[u8] = b"DCTNFTBurn";
+pub const DCT_TRANSFER_FUNC_NAME: &[u8] = b"DCTTransfer";
+pub const CHANGE_OWNER_BUILTIN_FUNC_NAME: &[u8] = b"ChangeOwnerAddress";
+pub const SET_USERNAME_FUNC_NAME: &[u8] = b"SetUserName";
+pub const UPGRADE_CONTRACT_FUNC_NAME: &[u8] = b"upgradeContract";

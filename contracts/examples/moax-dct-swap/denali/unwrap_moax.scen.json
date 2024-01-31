@@ -1,0 +1,70 @@
+{
+    "name": "unwrap moax",
+    "steps": [
+        {
+            "step": "externalSteps",
+            "path": "wrap_moax.scen.json"
+        },
+        {
+            "step": "scCall",
+            "txId": "unwrap-moax",
+            "tx": {
+                "from": "address:user",
+                "to": "sc:moax-dct-swap",
+                "dctValue": [
+                    {
+                        "tokenIdentifier": "str:WMOAX-abcdef",
+                        "value": "300"
+                    }
+                ],
+                "function": "unwrapMoax",
+                "arguments": [],
+                "gasLimit": "100,000,000",
+                "gasPrice": "0"
+            },
+            "expect": {
+                "out": [],
+                "status": "0",
+                "message": "",
+                "logs": [
+                    {
+                        "address": "sc:moax-dct-swap",
+                        "endpoint": "str:unwrapMoax",
+                        "topics": [
+                            "str:unwrap-moax",
+                            "address:user"
+                        ],
+                        "data": "300"
+                    }
+                ],
+                "gas": "*",
+                "refund": "*"
+            }
+        },
+        {
+            "step": "checkState",
+            "accounts": {
+                "address:user": {
+                    "nonce": "2",
+                    "balance": "800",
+                    "dct": {
+                        "str:WMOAX-abcdef": "200"
+                    },
+                    "storage": {}
+                },
+                "sc:moax-dct-swap": {
+                    "nonce": "0",
+                    "balance": "200",
+                    "dct": {
+                        "str:WMOAX-abcdef": "1800"
+                    },
+                    "storage": {
+                        "str:wrapped_moax_token_id": "str:WMOAX-abcdef",
+                        "str:unused_wrapped_moax": "1800"
+                    },
+                    "code": "file:../output/moax-dct-swap.wasm"
+                }
+            }
+        }
+    ]
+}

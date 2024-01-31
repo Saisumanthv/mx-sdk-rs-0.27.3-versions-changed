@@ -1,0 +1,30 @@
+[package]
+name = "dharitri-codec"
+version = "0.1.4"
+edition = "2018"
+
+authors = ["Andrei Marinica <andrei.marinica@dharitri.com>", "Dharitri Network <contact@dharitri.com>"]
+license = "GPL-3.0-only"
+readme = "README.md"
+repository = "https://github.com/Battula-anil-app-could/dx-sdk-rs-new"
+homepage = "https://dharitri.com/"
+documentation = "https://docs.dharitri.com/"
+description = "Lightweight binary serializer/deserializer, written especially for Dharitri smart contracts"
+keywords = ["dharitri", "wasm", "webassembly", "blockchain", "contract"]
+categories = ["no-std", "wasm", "cryptography::cryptocurrencies", "development-tools"]
+
+[features]
+derive = ["dharitri-codec-derive"]
+
+[dependencies.dharitri-codec-derive]
+path = "../dharitri-codec-derive"
+version = "=0.1.4"
+optional = true
+
+[dependencies]
+wee_alloc = "0.4"
+arrayvec = { version = "0.7.1", default-features = false }
+
+[dev-dependencies.dharitri-codec-derive]
+path = "../dharitri-codec-derive"
+version = "=0.1.4"
